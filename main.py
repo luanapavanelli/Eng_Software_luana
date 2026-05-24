@@ -12,20 +12,6 @@ from adapters.repositorio_sqlite import SQLiteProjetoRepository
 # 1. Configuração do Adaptador HTTP (FastAPI)
 app = FastAPI()
 
-# Defina as origens permitidas (seu frontend na Azure e localhost para testes)
-origins = [
-    "https://mod2eng.azurewebsites.net"
-]
-
-# Adicione o middleware de CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,       # Permite as origens listadas acima
-    allow_credentials=True,
-    allow_methods=["*"],         # Permite todos os métodos (GET, POST, PUT, DELETE, PATCH, etc)
-    allow_headers=["*"],         # Permite todos os cabeçalhos
-)
-
 
 # 2. Injeção de Dependências (A montagem do Hexágono)
 # Instanciamos o adaptador de banco de dados
