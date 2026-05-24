@@ -7,20 +7,28 @@ from typing import List, Optional
 from use_cases.gerenciar_projetos import GerenciarProjetosUseCase
 from adapters.repositorio_sqlite import SQLiteProjetoRepository
 
-
-
 # 1. Configuração do Adaptador HTTP (FastAPI)
 app = FastAPI()
 
+# --- ADD THIS CORS CONFIGURATION BLOCK ---
+origins = [
+    "https://mod2eng.azurewebsites.net",
+    "http://localhost",
+    "http://localhost:8080",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# -----------------------------------------
 
 # 2. Injeção de Dependências (A montagem do Hexágono)
-# Instanciamos o adaptador de banco de dados
 repositorio = SQLiteProjetoRepository(caminho_banco="banco_gestao.sqlite")
-# Injetamos o adaptador no Caso de Uso
 use_case = GerenciarProjetosUseCase(repositorio=repositorio)
-
-# Garantir que o projeto "MVP" existe logo que o servidor liga
-use_case.garantir_projeto_padrao()
 
 # 3. DTOs (Data Transfer Objects) - O que entra e sai da API
 # O Pydantic valida o JSON do Front-End. O nosso Núcleo não conhece o Pydantic!
