@@ -1,17 +1,19 @@
 import sqlite3
-from typing import List
-from domain.entidades import Arquivo
-from ports.repositorio import IArquivoRepository
+from typing import List, Optional
+from datetime import datetime
+from domain.entidades import Projeto
+from ports.repositorio import IProjetoRepository
 
 
-class SQLiteArquivoRepository(IArquivoRepository):
+class SQLiteProjetoRepository(IProjetoRepository):
     """
-    Adaptador de Base de Dados para o Microsserviço de Ingestão.
-    Ele assina o contrato 'IArquivoRepository' e traduz os comandos
-    do nosso núcleo para SQL puro.
+    Este é o Adaptador de Saída.
+    Ele assina o contrato 'IProjetoRepository' e sabe como traduzir a nossa
+    Entidade Pura (Projeto) para comandos SQL no banco SQLite.
+    Zero ORM, zero Django. Apenas SQL e Python nativo.
     """
 
-    def __init__(self, caminho_banco: str = "banco_ingestao.sqlite"):
+    def __init__(self, caminho_banco: str = "banco_gestao.sqlite"):
         self.caminho_banco = caminho_banco
         self._criar_tabela_se_nao_existir()
 
@@ -19,123 +21,95 @@ class SQLiteArquivoRepository(IArquivoRepository):
         return sqlite3.connect(self.caminho_banco)
 
     def _criar_tabela_se_nao_existir(self):
-        # Repara que não existe 'FOREIGN KEY' restrita ao outro banco de dados.
-        # Em microsserviços, o 'projeto_id' é apenas um número inteiro para referência.
         query = """
-                CREATE TABLE IF NOT EXISTS arquivos \
+                CREATE TABLE IF NOT EXISTS projetos \
                 ( \
                     id \
                     INTEGER \
                     PRIMARY \
                     KEY \
                     AUTOINCREMENT, \
-                    nome_original \
+                    nome \
                     TEXT \
                     NOT \
                     NULL, \
-                    projeto_id \
-                    INTEGER \
-                    NOT \
-                    NULL, \
-                    tipo \
+                    descricao \
                     TEXT, \
-                    tamanho_bytes \
-                    INTEGER, \
-                    data_ingestao \
+                    data_criacao \
+                    TIMESTAMP, \
+                    ultima_alteracao \
                     TIMESTAMP
                 ) \
                 """
         with self._conectar() as conn:
             conn.execute(query)
 
-    def salvar_metadados(self, arquivo: Arquivo) -> Arquivo:
+    def salvar(self, projeto: Projeto) -> Projeto:
         with self._conectar() as conn:
             cursor = conn.cursor()
 
-            if arquivo.id:
+            # Se o projeto já tem ID, é um Update. Se não, é um Insert.
+            if projeto.id:
                 query = """
-                        UPDATE arquivos
-                        SET nome_original = ?, \
-                            projeto_id    = ?, \
-                            tipo          = ?, \
-                            tamanho_bytes = ?
+                        UPDATE projetos
+                        SET nome             = ?, \
+                            descricao        = ?, \
+                            ultima_alteracao = ?
                         WHERE id = ? \
                         """
-                cursor.execute(query, (
-                    arquivo.nome_original, arquivo.projeto_id,
-                    arquivo.tipo, arquivo.tamanho_bytes, arquivo.id
-                ))
+                cursor.execute(query, (projeto.nome, projeto.descricao, projeto.ultima_alteracao, projeto.id))
             else:
                 query = """
-                        INSERT INTO arquivos (nome_original, projeto_id, tipo, tamanho_bytes, data_ingestao)
-                        VALUES (?, ?, ?, ?, ?) \
+                        INSERT INTO projetos (nome, descricao, data_criacao, ultima_alteracao)
+                        VALUES (?, ?, ?, ?) \
                         """
-                cursor.execute(query, (
-                    arquivo.nome_original, arquivo.projeto_id,
-                    arquivo.tipo, arquivo.tamanho_bytes, arquivo.data_ingestao
-                ))
-                arquivo.id = cursor.lastrowid
+                cursor.execute(query, (projeto.nome, projeto.descricao, projeto.data_criacao, projeto.ultima_alteracao))
+                projeto.id = cursor.lastrowid  # Pega o ID gerado pelo banco
 
             conn.commit()
-        return arquivo
+        return projeto
 
-    def buscar_por_projeto(self, projeto_id: int) -> List[Arquivo]:
-        query = """
-                SELECT id, nome_original, projeto_id, tipo, tamanho_bytes, data_ingestao
-                FROM arquivos \
-                WHERE projeto_id = ? \
-                ORDER BY data_ingestao DESC
-                """
-        arquivos = []
+    def buscar_por_id(self, projeto_id: int) -> Optional[Projeto]:
+        query = "SELECT id, nome, descricao, data_criacao, ultima_alteracao FROM projetos WHERE id = ?"
         with self._conectar() as conn:
             cursor = conn.cursor()
-            linhas = cursor.execute(query, (projeto_id,)).fetchall()
+            linha = cursor.execute(query, (projeto_id,)).fetchone()
+
+            if linha:
+                return Projeto(
+                    id=linha[0],
+                    nome=linha[1],
+                    descricao=linha[2],
+                    data_criacao=linha[3],
+                    ultima_alteracao=linha[4]
+                )
+        return None
+
+    def listar_todos(self) -> List[Projeto]:
+        query = "SELECT id, nome, descricao, data_criacao, ultima_alteracao FROM projetos"
+        projetos = []
+        with self._conectar() as conn:
+            cursor = conn.cursor()
+            linhas = cursor.execute(query).fetchall()
 
             for linha in linhas:
-                # Criamos a entidade sem carregar o binário, pois aqui só queremos os metadados para listar na UI
-                arq = Arquivo(
-                    nome_original=linha[1],
-                    projeto_id=linha[2],
-                    conteudo_binario=b""
-                )
-                arq.id = linha[0]
-                arq.tipo = linha[3]
-                arq.tamanho_bytes = linha[4]
-                arq.data_ingestao = linha[5]
-                arquivos.append(arq)
+                projetos.append(Projeto(
+                    id=linha[0],
+                    nome=linha[1],
+                    descricao=linha[2],
+                    data_criacao=linha[3],
+                    ultima_alteracao=linha[4]
+                ))
+        return projetos
 
-        return arquivos
-
-    def deletar_metadados(self, arquivo_id: int) -> bool:
-        query = "DELETE FROM arquivos WHERE id = ?"
+    def deletar(self, projeto_id: int) -> bool:
+        """
+        Execução direta do comando DELETE usando SQL nativo.
+        """
+        query = "DELETE FROM projetos WHERE id = ?"
         with self._conectar() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, (arquivo_id,))
+            cursor.execute(query, (projeto_id,))
             conn.commit()
+            # Retorna True se pelo menos uma linha foi modificada no banco
             return cursor.rowcount > 0
-
-    def buscar_por_id(self, arquivo_id: int) -> Arquivo:
-        query = """
-                SELECT id, nome_original, projeto_id, tipo, tamanho_bytes, data_ingestao
-                FROM arquivos
-                WHERE id = ?
-                """
-        with self._conectar() as conn:
-            cursor = conn.cursor()
-            linha = cursor.execute(query, (arquivo_id,)).fetchone()
-
-            if not linha:
-                return None
-
-            # Criamos a entidade
-            arq = Arquivo(
-                nome_original=linha[1],
-                projeto_id=linha[2],
-                conteudo_binario=b""
-            )
-            arq.id = linha[0]
-            arq.tipo = linha[3]
-            arq.tamanho_bytes = linha[4]
-            arq.data_ingestao = linha[5]
-
-            return arq

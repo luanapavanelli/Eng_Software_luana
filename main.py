@@ -1,115 +1,98 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse  # 1. ALTERAÇÃO: Importado para enviar ficheiros físicos via HTTP
 from pydantic import BaseModel
-from typing import List
-from datetime import datetime
+from typing import List, Optional
 
 # Importamos a nossa arquitetura limpa
-from use_cases.upload_arquivo import UploadArquivoUseCase, ListarArquivosUseCase
-from use_cases.download_arquivo import DownloadArquivoUseCase  # 2. ALTERAÇÃO: Importado o novo Caso de Uso
-from adapters.repositorio_sqlite import SQLiteArquivoRepository
-from adapters.storage_local import LocalStorageAdapter
-from use_cases.deletar_arquivo import DeletarArquivoUseCase
+from use_cases.gerenciar_projetos import GerenciarProjetosUseCase
+from adapters.repositorio_sqlite import SQLiteProjetoRepository
 
-# Configuração do Adaptador HTTP (FastAPI)
-app = FastAPI(title="Microsserviço de Ingestão e Armazenamento")
+# 1. Configuração do Adaptador HTTP (FastAPI)
+app = FastAPI(title="Microsserviço de Gestão Organizacional")
 
-# Permitir que o Front-End comunique com esta API
+# Permitir que o teu Front-End (HTML/JS) consiga fazer requisições para esta API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], # Num ambiente real, colocaríamos o domínio exato do Front-End
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Injeção de Dependências (Montagem das Peças)
-repositorio_db = SQLiteArquivoRepository(caminho_banco="banco_ingestao.sqlite")
-storage_disco = LocalStorageAdapter(diretorio_base="armazenamento_local")
+# 2. Injeção de Dependências (A montagem do Hexágono)
+# Instanciamos o adaptador de banco de dados
+repositorio = SQLiteProjetoRepository(caminho_banco="banco_gestao.sqlite")
+# Injetamos o adaptador no Caso de Uso
+use_case = GerenciarProjetosUseCase(repositorio=repositorio)
 
-# Injetamos os adaptadores nos Casos de Uso
-upload_use_case = UploadArquivoUseCase(repositorio=repositorio_db, storage=storage_disco)
-listar_use_case = ListarArquivosUseCase(repositorio=repositorio_db)
-download_use_case = DownloadArquivoUseCase(repositorio=repositorio_db)
-deletar_use_case = DeletarArquivoUseCase(repositorio=repositorio_db, storage=storage_disco)
+# Garantir que o projeto "MVP" existe logo que o servidor liga
+use_case.garantir_projeto_padrao()
 
-# DTOs (Data Transfer Objects) para formatar a saída da API
-class ArquivoResponse(BaseModel):
+# 3. DTOs (Data Transfer Objects) - O que entra e sai da API
+# O Pydantic valida o JSON do Front-End. O nosso Núcleo não conhece o Pydantic!
+class ProjetoCreate(BaseModel):
+    nome: str
+    descricao: Optional[str] = None
+
+class ProjetoResponse(BaseModel):
     id: int
-    nome_original: str
-    projeto_id: int
-    tipo: str
-    tamanho_bytes: int
-    data_ingestao: datetime
+    nome: str
+    descricao: Optional[str]
 
+# 4. Rotas HTTP (As tomadas da Porta de Entrada)
 
-# Rotas HTTP
+@app.get("/api/projetos/", response_model=List[ProjetoResponse])
+def listar_projetos():
+    """
+    Lista todos os projetos. Repara que a View (Rota) é 'burra'.
+    Ela apenas pede ao Caso de Uso para trabalhar e devolve a resposta.
+    """
+    return use_case.listar_projetos()
 
-@app.post("/api/arquivos/", response_model=ArquivoResponse)
-async def fazer_upload(
-        projeto_id: int = Form(...),
-        file: UploadFile = File(...)
-):
-    """Recebe um ficheiro físico e envia os bytes para o núcleo de domínio."""
+@app.post("/api/projetos/", response_model=ProjetoResponse)
+def criar_projeto(projeto_in: ProjetoCreate):
+    """
+    Recebe um JSON, envia para o Caso de Uso criar o projeto.
+    Se o nosso Núcleo disparar um erro de regra de negócio (ex: nome curto),
+    a API apanha o erro e traduz para um Erro HTTP 400.
+    """
     try:
-        conteudo_binario = await file.read()
-        arquivo_salvo = upload_use_case.executar(
-            nome_original=file.filename,
-            projeto_id=projeto_id,
-            conteudo_binario=conteudo_binario
+        novo_projeto = use_case.criar_projeto(
+            nome=projeto_in.nome,
+            descricao=projeto_in.descricao
         )
-        return arquivo_salvo
+        return novo_projeto
+    except ValueError as erro:
+        # Tradução de erro de Domínio para erro de Web
+        raise HTTPException(status_code=400, detail=str(erro))
+
+@app.delete("/api/projetos/{projeto_id}", response_model=dict)
+def deletar_projeto(projeto_id: int):
+    """
+    Porta de Entrada HTTP para exclusão.
+    Recebe o ID da URL e encaminha para o Caso de Uso tratar.
+    """
+    try:
+        sucesso = use_case.deletar_projeto(projeto_id)
+        return {"success": sucesso, "message": f"Projeto {projeto_id} removido com sucesso."}
+    except ValueError as erro:
+        raise HTTPException(status_code=404, detail=str(erro))
+    except Exception as erro:
+        raise HTTPException(status_code=500, detail=f"Erro interno de infraestrutura: {str(erro)}")
+
+@app.put("/api/projetos/{projeto_id}", response_model=ProjetoResponse)
+def editar_projeto(projeto_id: int, projeto_in: ProjetoCreate):
+    """
+    Porta de entrada HTTP para modificação dos dados cadastrais do projeto.
+    """
+    try:
+        projeto_editado = use_case.editar_projeto(
+            projeto_id=projeto_id,
+            nome=projeto_in.nome,
+            descricao=projeto_in.descricao
+        )
+        return projeto_editado
     except ValueError as erro:
         raise HTTPException(status_code=400, detail=str(erro))
     except Exception as erro:
-        raise HTTPException(status_code=500, detail=f"Erro interno: {str(erro)}")
-
-
-@app.get("/api/arquivos/projeto/{projeto_id}", response_model=List[ArquivoResponse])
-def listar_arquivos_do_projeto(projeto_id: int):
-    """Lista os metadados de todos os ficheiros pertencentes a um projeto."""
-    return listar_use_case.executar(projeto_id=projeto_id)
-
-
-# 4. ALTERAÇÃO: Nova rota HTTP mapeada diretamente para o nosso Caso de Uso de Download
-@app.get("/api/arquivos/download/{projeto_id}/{arquivo_id}")
-def baixar_arquivo(projeto_id: int, arquivo_id: int):
-    """
-    Substitui a antiga rota estática '/media/' do Django.
-    Chama o Caso de Uso para localizar o arquivo e usa o FileResponse
-    do FastAPI para o entregar de forma nativa ao navegador.
-    """
-    try:
-        # O Caso de Uso atua como detetive e devolve apenas a String com o caminho do ficheiro
-        caminho_fisico = download_use_case.executar(projeto_id=projeto_id, arquivo_id=arquivo_id)
-
-        # O Adaptador HTTP (FastAPI) pega no caminho, lê os bytes e entrega ao cliente
-        return FileResponse(path=caminho_fisico)
-
-    except ValueError as erro:
-        # Se o ficheiro não existir no banco de dados (Regra de Negócio)
-        raise HTTPException(status_code=404, detail=str(erro))
-    except FileNotFoundError as erro:
-        # Se o registo existir no banco, mas o ficheiro físico tiver sido apagado do disco (Erro de Infraestrutura)
-        raise HTTPException(status_code=404, detail=str(erro))
-
-
-@app.delete("/api/arquivos/{projeto_id}/{arquivo_id}")
-def deletar_arquivo(projeto_id: int, arquivo_id: int):
-    """
-    Remove o ficheiro físico do disco e apaga seus metadados do banco de dados.
-    """
-    try:
-        sucesso = deletar_use_case.executar(projeto_id=projeto_id, arquivo_id=arquivo_id)
-        if sucesso:
-            return {"mensagem": "Arquivo excluído com sucesso."}
-        else:
-            raise HTTPException(status_code=400, detail="Não foi possível concluir a exclusão do arquivo.")
-
-    except ValueError as erro:
-        # Cai aqui se o ficheiro não for encontrado no banco ou não pertencer ao projeto
-        raise HTTPException(status_code=404, detail=str(erro))
-    except Exception as erro:
-        # Cai aqui se houver um erro de permissão no disco (SO) ou erro no SQL
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(erro)}")
