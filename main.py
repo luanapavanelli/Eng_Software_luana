@@ -10,15 +10,6 @@ from adapters.repositorio_sqlite import SQLiteProjetoRepository
 # 1. Configuração do Adaptador HTTP (FastAPI)
 app = FastAPI(title="Microsserviço de Gestão Organizacional")
 
-# Permitir que o teu Front-End (HTML/JS) consiga fazer requisições para esta API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # Num ambiente real, colocaríamos o domínio exato do Front-End
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # 2. Injeção de Dependências (A montagem do Hexágono)
 # Instanciamos o adaptador de banco de dados
 repositorio = SQLiteProjetoRepository(caminho_banco="banco_gestao.sqlite")
